@@ -3,9 +3,13 @@
 import asyncio
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Callable
+from urllib.parse import urlparse
 
 import structlog
-from surrealdb import AsyncSurrealDB
+from surrealdb import AsyncSurreal
+from surrealdb.connections.async_embedded import AsyncEmbeddedSurrealConnection
+from surrealdb.connections.async_http import AsyncHttpSurrealConnection
+from surrealdb.connections.async_ws import AsyncWsSurrealConnection
 
 from orchestrator.config import SurrealDBSettings
 from orchestrator.surrealdb.schema import (
@@ -19,6 +23,29 @@ from orchestrator.surrealdb.schema import (
 
 logger = structlog.get_logger(__name__)
 
+SurrealConnection = (
+    AsyncEmbeddedSurrealConnection | AsyncHttpSurrealConnection | AsyncWsSurrealConnection
+)
+
+_EMBEDDED_SCHEMES = frozenset({"mem", "memory", "file", "surrealkv", "surrealkv+versioned"})
+
+
+def _is_embedded_url(url: str) -> bool:
+    """Return True when the URL targets an embedded SurrealDB engine."""
+    scheme = urlparse(url).scheme.lower()
+    return scheme in _EMBEDDED_SCHEMES
+
+
+def _records_from_query(result: Any) -> list[dict[str, Any]]:
+    """Normalize SurrealDB 2.x query results into a list of record dicts."""
+    if result is None:
+        return []
+    if isinstance(result, list):
+        return [item for item in result if isinstance(item, dict)]
+    if isinstance(result, dict):
+        return [result]
+    return []
+
 
 class SurrealDBClient:
     """Async SurrealDB client with connection management."""
@@ -26,9 +53,10 @@ class SurrealDBClient:
     def __init__(self, settings: SurrealDBSettings) -> None:
         """Initialize the client with settings."""
         self.settings = settings
-        self._db: AsyncSurrealDB | None = None
+        self._db: SurrealConnection | None = None
         self._connected = False
         self._lock = asyncio.Lock()
+        self._live_tasks: dict[str, asyncio.Task[None]] = {}
 
     async def connect(self) -> None:
         """Connect to SurrealDB."""
@@ -36,16 +64,16 @@ class SurrealDBClient:
             if self._connected:
                 return
 
-            self._db = AsyncSurrealDB(self.settings.url)
+            self._db = AsyncSurreal(self.settings.url)
             await self._db.connect()
 
-            # Sign in
-            await self._db.signin({
-                "username": self.settings.username,
-                "password": self.settings.password,
-            })
+            # Embedded engines do not require root signin; remote endpoints do.
+            if not _is_embedded_url(self.settings.url):
+                await self._db.signin({
+                    "username": self.settings.username,
+                    "password": self.settings.password,
+                })
 
-            # Use namespace and database
             await self._db.use(self.settings.namespace, self.settings.database)
 
             self._connected = True
@@ -60,6 +88,18 @@ class SurrealDBClient:
         """Disconnect from SurrealDB."""
         async with self._lock:
             if self._db and self._connected:
+                for live_id, task in list(self._live_tasks.items()):
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                    try:
+                        await self._db.kill(live_id)
+                    except Exception:
+                        pass
+                self._live_tasks.clear()
+
                 await self._db.close()
                 self._connected = False
                 logger.info("Disconnected from SurrealDB")
@@ -73,7 +113,7 @@ class SurrealDBClient:
         finally:
             pass  # Keep connection open for reuse
 
-    async def _ensure_connected(self) -> AsyncSurrealDB:
+    async def _ensure_connected(self) -> SurrealConnection:
         """Ensure we have a connected database instance."""
         if not self._connected or self._db is None:
             await self.connect()
@@ -141,13 +181,7 @@ class SurrealDBClient:
             LIMIT $limit
         """
         result = await db.query(query, {"limit": limit})
-
-        scenarios = []
-        if result and len(result) > 0 and result[0].get("result"):
-            for item in result[0]["result"]:
-                scenarios.append(Scenario.from_surreal(item))
-
-        return scenarios
+        return [Scenario.from_surreal(item) for item in _records_from_query(result)]
 
     async def get_ready_scenarios(self, limit: int = 10) -> list[Scenario]:
         """Get scenarios that are ready to execute (pending with met dependencies)."""
@@ -155,13 +189,7 @@ class SurrealDBClient:
 
         # Call the custom function
         result = await db.query("RETURN fn::get_ready_scenarios($limit)", {"limit": limit})
-
-        scenarios = []
-        if result and len(result) > 0 and result[0].get("result"):
-            for item in result[0]["result"]:
-                scenarios.append(Scenario.from_surreal(item))
-
-        return scenarios
+        return [Scenario.from_surreal(item) for item in _records_from_query(result)]
 
     # -------------------------------------------------------------------------
     # Execution Operations
@@ -271,7 +299,7 @@ class SurrealDBClient:
             {"scenario_id": scenario_id, "execution_id": execution_id, "error": error},
         )
 
-        will_retry = bool(result and result[0].get("result"))
+        will_retry = bool(result)
         logger.info(
             "Failed scenario",
             scenario_id=scenario_id,
@@ -291,18 +319,45 @@ class SurrealDBClient:
         """Subscribe to live updates on scenarios. Returns the live query ID."""
         db = await self._ensure_connected()
 
-        async def handle_notification(notification: dict[str, Any]) -> None:
-            action = notification.get("action", "")
-            result = notification.get("result", {})
-            callback(action, result)
+        live_id = await db.live("scenario")
+        live_id_str = str(live_id)
+        subscription = await db.subscribe_live(live_id)
 
-        live_id = await db.live("scenario", callback=handle_notification)
-        logger.info("Started live query on scenarios", live_id=live_id)
-        return live_id
+        async def listen() -> None:
+            try:
+                async for notification in subscription:
+                    if not isinstance(notification, dict):
+                        continue
+
+                    if "action" in notification:
+                        callback(
+                            str(notification.get("action", "")),
+                            notification.get("result", notification),
+                        )
+                        continue
+
+                    callback("UPDATE", notification)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning("Live query listener stopped", live_id=live_id_str, error=str(e))
+
+        self._live_tasks[live_id_str] = asyncio.create_task(listen())
+        logger.info("Started live query on scenarios", live_id=live_id_str)
+        return live_id_str
 
     async def kill_live_query(self, live_id: str) -> None:
         """Kill a live query subscription."""
         db = await self._ensure_connected()
+
+        task = self._live_tasks.pop(live_id, None)
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
         await db.kill(live_id)
         logger.info("Killed live query", live_id=live_id)
 
@@ -315,9 +370,7 @@ class SurrealDBClient:
         db = await self._ensure_connected()
 
         result = await db.query("RETURN fn::get_execution_stats()")
-        if result and len(result) > 0:
-            return result[0].get("result", {})
-        return {}
+        return result if isinstance(result, dict) else {}
 
     # -------------------------------------------------------------------------
     # Raw Query

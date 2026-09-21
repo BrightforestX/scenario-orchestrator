@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from orchestrator.surrealdb.schema import (
+    ChainletConfig,
     ExecutionResult,
     Scenario,
     ScenarioStatus,
@@ -65,7 +66,7 @@ class TestEventTrigger:
             name="New Scenario",
             status=ScenarioStatus.PENDING,
             interests=[],
-            chainlet_config=MagicMock(),
+            chainlet_config=ChainletConfig(model="test"),
         )
 
         await trigger._on_scenario_created(scenario)
@@ -104,7 +105,7 @@ class TestEventTrigger:
             name="Completed Scenario",
             status=ScenarioStatus.COMPLETED,
             interests=[],
-            chainlet_config=MagicMock(),
+            chainlet_config=ChainletConfig(model="test"),
         )
 
         await trigger._on_scenario_created(scenario)
@@ -152,7 +153,7 @@ class TestPollTrigger:
             name="Poll Test",
             status=ScenarioStatus.PENDING,
             interests=[],
-            chainlet_config=MagicMock(),
+            chainlet_config=ChainletConfig(model="test"),
         )
 
         mock_client = MagicMock()
@@ -195,7 +196,7 @@ class TestPollTrigger:
             name="Duplicate Test",
             status=ScenarioStatus.PENDING,
             interests=[],
-            chainlet_config=MagicMock(),
+            chainlet_config=ChainletConfig(model="test"),
         )
 
         mock_client = MagicMock()
