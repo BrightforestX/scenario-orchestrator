@@ -32,7 +32,7 @@ def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
 def surrealdb_settings() -> SurrealDBSettings:
     """Create SurrealDB settings for testing."""
     return SurrealDBSettings(
-        url="memory",  # Use in-memory database for tests
+        url="mem://",  # Use in-memory database for tests
         namespace="test",
         database="scenarios",
         username="root",
