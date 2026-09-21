@@ -1,0 +1,47 @@
+# Baseten Chainlet Configuration
+# Deploy with: truss push chain.yaml
+
+name: scenario-orchestrator-chain
+description: Chainlet for executing scenario prompts with open source models
+
+# Use minReplicas: 0 for cost efficiency
+# The chainlet will scale up automatically when requests arrive
+resources:
+  cpu: "2"
+  memory: 4Gi
+  use_gpu: false
+  accelerator: null
+
+runtime:
+  predict_concurrency: 4
+
+# Model configuration
+model_metadata:
+  # Default to using a Llama model, but can be overridden per-request
+  default_model: "meta-llama/Llama-3.1-8B-Instruct"
+  
+  # Supported models that can be specified in chainlet_config.model
+  supported_models:
+    - "meta-llama/Llama-3.1-8B-Instruct"
+    - "meta-llama/Llama-3.1-70B-Instruct"
+    - "mistralai/Mistral-7B-Instruct-v0.3"
+    - "mistralai/Mixtral-8x7B-Instruct-v0.1"
+    - "codellama/CodeLlama-34b-Instruct-hf"
+
+# Scaling configuration
+autoscaling:
+  minReplicas: 0
+  maxReplicas: 5
+  targetConcurrency: 2
+  scaleDownDelay: 300  # 5 minutes before scaling down
+
+# Environment variables (set via Baseten secrets)
+secrets:
+  - BASETEN_API_KEY
+
+# Python requirements
+requirements:
+  - transformers>=4.40.0
+  - torch>=2.2.0
+  - accelerate>=0.30.0
+  - bitsandbytes>=0.43.0
