@@ -7,6 +7,7 @@ import structlog
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel, Field
 
+from orchestrator.pipeline.api import create_pipeline_router
 from orchestrator.surrealdb.client import SurrealDBClient
 from orchestrator.surrealdb.schema import (
     Scenario,
@@ -110,6 +111,7 @@ class FunctionTrigger:
         )
 
         self._setup_routes()
+        self.app.include_router(create_pipeline_router(lambda: self.client))
 
     def _setup_routes(self) -> None:
         """Set up FastAPI routes."""

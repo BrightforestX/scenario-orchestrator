@@ -155,6 +155,84 @@ curl -X POST http://localhost:8080/trigger/batch \
 curl http://localhost:8080/stats
 ```
 
+## Durable Scenario Analysis Pipeline (MVP v1.1)
+
+Extends the orchestrator with a **fixture-driven, Temporal-durable** analysis pipeline aligned to Clifford's Buzz Backend spec (sections 6–9, 16):
+
+```
+Trino/fixture → JSONL → Surreal load → NumPy draws → fn::score_v1 → TS gate → commit
+```
+
+| Spec section | MVP implementation |
+|--------------|-------------------|
+| §6 Extract | `POST /v1/extract` — Trino SQL or fixture JSONL path |
+| §7 Load | `POST /v1/load` — idempotent batch upsert (`openapi_fact` + `scenario_entity`) |
+| §8 Draw/Score | `POST /v1/draw`, `POST /v1/score` — seeded NumPy + `fn::score_one_v1` |
+| §9 Gate/Commit | TypeScript `gate/` service (`POST /v1/gate`); `POST /v1/commit`, `/v1/compensate` |
+| §16 Durability | `ScenarioPipelineWorkflow` + activities; worker via `pipeline-worker` |
+
+**Division of responsibility:** Surreal holds data and light math; Python owns heavy math and I/O; **TypeScript is the keep-or-revert judge** (Python never decides keep).
+
+### Pipeline schema
+
+Import alongside the existing orchestrator schema (configurable ns/db via `SURREALDB_*`):
+
+```bash
+surreal import --conn http://localhost:8000 --ns buzz --db scenarios surreal/pipeline_schema.surql
+surreal import --conn http://localhost:8000 --ns buzz --db scenarios surreal/pipeline_functions.surql
+```
+
+JSONL records follow the linkml-surreal contract: `id`, `source`, `pulled_at`, `payload_hash`, `payload`.
+
+### Local stack (docker compose)
+
+```bash
+docker compose up -d surreal temporal gate
+pip install -e ".[dev]"
+orchestrator          # pipeline API on :8080 (/v1/* mounted)
+pipeline-worker       # Temporal worker (optional for fixture demo)
+```
+
+### Promotion demo (golden fixture, no Trino/Baseten)
+
+```bash
+# 1. Extract fixture → JSONL
+curl -s -X POST http://localhost:8080/v1/extract \
+  -H 'Content-Type: application/json' \
+  -d '{"run_id":"demo-001","fixture_path":"fixtures/golden/entities.jsonl"}'
+
+# 2. Load (batch 2 for resume demo)
+curl -s -X POST http://localhost:8080/v1/load \
+  -H 'Content-Type: application/json' \
+  -d '{"run_id":"demo-001","path":"/tmp/scenario-pipeline/demo-001.jsonl","batch_index":0,"batch_size":2}'
+
+# 3. Draw (seeded)
+curl -s -X POST 'http://localhost:8080/v1/draw?persist=true' \
+  -H 'Content-Type: application/json' \
+  -d '{"run_id":"demo-001","seed":3,"bounds":[{"name":"multiplier","min":0.5,"max":2.0}],"num_samples":3}'
+
+# 4. Score (SurrealQL — no keep/revert)
+curl -s -X POST http://localhost:8080/v1/score \
+  -H 'Content-Type: application/json' \
+  -d @/tmp/score-request.json   # use draws from step 3
+
+# 5. Gate (TypeScript judge on :8090)
+curl -s -X POST http://localhost:8090/v1/gate \
+  -H 'Content-Type: application/json' \
+  -d '{"run_id":"demo-001","scores":[...],"criteria":{"min_score":20.0}}'
+
+# 6. Commit winners
+curl -s -X POST http://localhost:8080/v1/commit \
+  -H 'Content-Type: application/json' \
+  -d '{"run_id":"demo-001","winners":[...]}'
+```
+
+Run the golden e2e tests (embedded Surreal, no external services):
+
+```bash
+pytest tests/pipeline/ -v
+```
+
 ## Testing
 
 ```bash
@@ -206,6 +284,12 @@ pytest tests/ -v
 | `/trigger` | POST | Trigger single scenario |
 | `/trigger/batch` | POST | Trigger multiple scenarios |
 | `/trigger/create` | POST | Create and trigger scenario |
+| `/v1/extract` | POST | Pipeline extract (Trino or fixture → JSONL) |
+| `/v1/load` | POST | Batch upsert JSONL into Surreal |
+| `/v1/draw` | POST | Seeded NumPy parameter draws |
+| `/v1/score` | POST | SurrealQL scoring (no keep/revert) |
+| `/v1/commit` | POST | Persist gate-approved winners |
+| `/v1/compensate` | POST | Delete staged winners for run_id |
 
 ### SurrealDB Custom Functions
 

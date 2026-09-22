@@ -1,0 +1,34 @@
+# Local stack for Durable Scenario Analysis Pipeline MVP
+# Usage: docker compose up -d surreal temporal gate
+services:
+  surreal:
+    image: surrealdb/surrealdb:v2.1.4
+    command: start --log trace --user root --pass root memory
+    ports:
+      - "8000:8000"
+
+  temporal:
+    image: temporalio/auto-setup:1.25.2
+    ports:
+      - "7233:7233"
+    environment:
+      - DB=sqlite
+      - SQLITE_PRAGMA_journal_mode=WAL
+
+  temporal-ui:
+    image: temporalio/ui:2.31.2
+    ports:
+      - "8233:8080"
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+
+  gate:
+    image: node:22-bookworm
+    working_dir: /app/gate
+    volumes:
+      - ./gate:/app/gate
+    command: sh -c "npm install && npm run dev"
+    ports:
+      - "8090:8090"
+    environment:
+      - GATE_PORT=8090
