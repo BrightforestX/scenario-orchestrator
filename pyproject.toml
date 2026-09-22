@@ -15,9 +15,14 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "secp256k1>=0.14.0",
     "structlog>=24.0.0",
+    "numpy>=1.26.0",
+    "temporalio>=1.8.0",
 ]
 
 [project.optional-dependencies]
+trino = [
+    "trino>=0.330.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23.0",
@@ -28,6 +33,7 @@ dev = [
 
 [project.scripts]
 orchestrator = "orchestrator.main:main"
+pipeline-worker = "orchestrator.temporal.worker:main"
 
 [build-system]
 requires = ["hatchling"]

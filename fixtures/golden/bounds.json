@@ -1,0 +1,3 @@
+[
+  {"name": "multiplier", "min": 0.5, "max": 2.0, "dtype": "float"}
+]

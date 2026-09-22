@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "cursor/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: pip install -e ".[dev]"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install gate dependencies
+        working-directory: gate
+        run: npm install
+
+      - name: Lint Python (pipeline)
+        run: ruff check src/orchestrator/pipeline src/orchestrator/temporal tests/pipeline
+
+      - name: Run tests
+        run: pytest tests/ -v --tb=short
