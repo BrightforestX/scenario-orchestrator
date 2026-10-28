@@ -54,6 +54,17 @@ class ChainletConfig(BaseModel):
     timeout_seconds: int = Field(default=120, description="Request timeout")
 
 
+class CodingAgentGoal(BaseModel):
+    """Measurable stop condition for coding agents (Clifford /goal harness)."""
+
+    measurable_end: str = Field(description="What done looks like, in plain language")
+    proof_commands: list[str] = Field(
+        default_factory=list,
+        description="Shell commands that must exit 0 to prove completion",
+    )
+    max_turns: int = Field(default=30, ge=1, description="Maximum agent turns before stop")
+
+
 class SandboxConfig(BaseModel):
     """Configuration for Daytona sandbox execution."""
 
@@ -64,6 +75,10 @@ class SandboxConfig(BaseModel):
     commands: list[str] = Field(default_factory=list, description="Commands to execute")
     files: dict[str, str] = Field(default_factory=dict, description="Files to upload (path -> content)")
     env: dict[str, str] = Field(default_factory=dict, description="Environment variables")
+    coding_agent_goal: CodingAgentGoal | None = Field(
+        default=None,
+        description="When set, prefix coding-agent CLI commands with /goal harness",
+    )
 
 
 class BuzzConfig(BaseModel):

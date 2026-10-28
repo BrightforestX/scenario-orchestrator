@@ -30,5 +30,14 @@ jobs:
       - name: Lint Python (pipeline)
         run: ruff check src/orchestrator/pipeline src/orchestrator/temporal tests/pipeline
 
-      - name: Run tests
-        run: pytest tests/ -v --tb=short
+      - name: Typecheck (mypy --strict)
+        run: mypy --strict src/orchestrator src/chainlets
+
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ -v --tb=short \
+            --cov=src/orchestrator \
+            --cov=src/chainlets \
+            --cov-branch \
+            --cov-fail-under=100 \
+            --cov-report=term-missing
