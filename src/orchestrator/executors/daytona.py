@@ -7,9 +7,35 @@ import httpx
 import structlog
 
 from orchestrator.config import DaytonaSettings
-from orchestrator.surrealdb.schema import SandboxConfig, Scenario
+from orchestrator.surrealdb.schema import CodingAgentGoal, SandboxConfig, Scenario
 
 logger = structlog.get_logger(__name__)
+
+_CODING_AGENT_CLI_PREFIXES = ("cursor ", "claude ", "codex ")
+
+
+def build_goal_prefix(goal: CodingAgentGoal) -> str:
+    """Build the /goal prefix string for a coding agent harness."""
+    if goal.proof_commands:
+        proof = "; ".join(f"{cmd} exit 0" for cmd in goal.proof_commands)
+    else:
+        proof = "pytest exit 0"
+    return (
+        f"/goal {goal.measurable_end}; "
+        f"proven by {proof}; "
+        f"stop after {goal.max_turns} turns"
+    )
+
+
+def harness_coding_agent_command(command: str, goal: CodingAgentGoal) -> str:
+    """Prefix coding-agent CLI invocations with /goal when a harness is configured."""
+    stripped = command.lstrip()
+    if stripped.startswith("/goal"):
+        return command
+    lower = stripped.lower()
+    if not any(lower.startswith(prefix) for prefix in _CODING_AGENT_CLI_PREFIXES):
+        return command
+    return f"{build_goal_prefix(goal)}; {command}"
 
 
 class SandboxError(Exception):
@@ -334,6 +360,8 @@ class DaytonaExecutor:
             # Execute commands
             outputs: list[str] = []
             for command in config.commands:
+                if config.coding_agent_goal is not None:
+                    command = harness_coding_agent_command(command, config.coding_agent_goal)
                 output, exit_code = await self.execute_command(sandbox_id, command)
                 outputs.append(f"$ {command}\n{output}")
 
@@ -381,6 +409,8 @@ class DaytonaExecutor:
         # Execute commands
         outputs: list[str] = []
         for command in config.commands:
+            if config.coding_agent_goal is not None:
+                command = harness_coding_agent_command(command, config.coding_agent_goal)
             output, exit_code = await self.execute_command(sandbox_id, command)
             outputs.append(f"$ {command}\n{output}")
 

@@ -56,3 +56,14 @@ testpaths = ["tests"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
+
+[tool.coverage.run]
+branch = true
+source = ["src/orchestrator", "src/chainlets"]
+relative_files = true
+
+[tool.coverage.report]
+fail_under = 100
+precision = 2
+show_missing = true
+skip_covered = false
